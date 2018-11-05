@@ -6,8 +6,10 @@ import 'package:flutter/foundation.dart';
 class PhotoView extends StatefulWidget {
   final String imageUrl;
   final AnimationController opacityController;
+  final String heroTag;
 
-  PhotoView({Key key, @required this.imageUrl, @required this.opacityController}) : super(key: key);
+  PhotoView({Key key, @required this.imageUrl, @required this.opacityController, this.heroTag})
+      : super(key: key);
 
   @override
   State<StatefulWidget> createState() => new _LoadMoreViewState();
@@ -19,68 +21,78 @@ const double kMaxScale = 3.0;
 class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin {
   GlobalKey _imageKey = new GlobalKey();
 
-  AnimationController _controller;
-  CurvedAnimation _curvedAnimation;
-  Tween<double> _scaleTween;
-  Tween<Offset> _positionTween;
+  Offset _position;
+  Offset _normalizedPosition;
+  double _scale;
+  double _scaleBefore;
 
-  // 放大/和放大的基点的值. 在动画/手势中会实时变化
-  double _scale = kMinScale;
-  Offset _position = Offset.zero;
+  AnimationController _scaleAnimationController;
+  Animation<double> _scaleAnimation;
 
-  // ==== 辅助动画/手势的计算
-  int _lastTapTime = 0;
-  Offset _downPoint = Offset.zero;
-  Offset _downPosition = Offset.zero;
+  AnimationController _positionAnimationController;
+  Animation<Offset> _positionAnimation;
 
-  /// 上次放大的比例, 用于帮助下次放大操作时放大的速度保持一致.
-  double _lastScaleValue = kMinScale;
-  Offset _lastPosition = Offset.zero;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = new AnimationController(duration: new Duration(milliseconds: 300), vsync: this)
-      ..addListener(_handleScaleAnim);
-
-    _curvedAnimation = new CurvedAnimation(parent: _controller, curve: Curves.fastOutSlowIn);
-  }
-
-  _forwardAnimations() {
-    _scaleTween = new Tween<double>(begin: _scale, end: kMaxScale);
-
-    var containerSize = MediaQuery.of(context).size;
-    var center = new Offset(containerSize.width, containerSize.height) / 2.0;
-    var delta = center - _downPoint;
-    var positionDelta = (delta * kMaxScale);
-    _positionTween = new Tween<Offset>(begin: _position, end: _clampPosition(positionDelta, 3.0));
-  }
-
-  _resetAnimations() {
-    _scaleTween = new Tween<double>(begin: _scale, end: kMinScale);
-    _positionTween = new Tween<Offset>(begin: _position, end: Offset.zero);
-  }
-
-  _handleScaleAnim() {
-    var newScale = _scaleTween.evaluate(_curvedAnimation);
+  void handleScaleAnimation() {
     setState(() {
-      _scale = newScale;
-      _position = _positionTween.evaluate(_curvedAnimation);
+      _scale = _scaleAnimation.value;
     });
   }
 
-  Offset _clampPosition(Offset offset, double scale) {
+  void handlePositionAnimate() {
+    setState(() {
+      _position = _positionAnimation.value;
+    });
+  }
+
+  void onScaleStart(ScaleStartDetails details) {
+    _scaleBefore = scaleStateAwareScale();
+    _normalizedPosition = details.focalPoint - _position;
+    _scaleAnimationController.stop();
+    _positionAnimationController.stop();
+  }
+
+  void onScaleUpdate(ScaleUpdateDetails details) {
+    final double newScale = _scaleBefore * details.scale;
+    final Offset delta = details.focalPoint - _normalizedPosition;
+    setState(() {
+      _scale = newScale;
+      _position = clampPosition(delta * details.scale);
+    });
+  }
+
+  void onScaleEnd(ScaleEndDetails details) {
+    final double maxScale = 3.0;
+    final double minScale = 1.0;
+
+    //animate back to maxScale if gesture exceeded the maxScale specified
+    if (_scale > maxScale) {
+      final double scaleComebackRatio = maxScale / _scale;
+      animateScale(_scale, maxScale);
+      animatePosition(_position, clampPosition(_position * scaleComebackRatio, maxScale));
+      return;
+    }
+
+    //animate back to minScale if gesture fell smaller than the minScale specified
+    if (_scale < minScale) {
+      final double scaleComebackRatio = minScale / _scale;
+      animateScale(_scale, minScale);
+      animatePosition(_position, clampPosition(_position * scaleComebackRatio, maxScale));
+      return;
+    }
+  }
+
+  Offset clampPosition(Offset offset, [double scale]) {
     var imageSize = _imageKey.currentContext.findRenderObject().paintBounds.size;
 
-    final x = offset.dx;
-    final y = offset.dy;
-    final computedWidth = imageSize.width * scale;
-    final computedHeight = imageSize.height * scale;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
-    final screenHalfX = screenWidth / 2;
-    final screenHalfY = screenHeight / 2;
+    final double _scale = scale ?? scaleStateAwareScale();
+    final double x = offset.dx;
+    final double y = offset.dy;
+    final double computedWidth = imageSize.width * _scale;
+    final double computedHeight = imageSize.height * _scale;
+    final double screenWidth = context.size.width;
+    final double screenHeight = context.size.height;
+    final double screenHalfX = screenWidth / 2;
+    final double screenHalfY = screenHeight / 2;
 
     final double computedX = screenWidth < computedWidth
         ? x.clamp(0 - (computedWidth / 2) + screenHalfX, computedWidth / 2 - screenHalfX)
@@ -90,75 +102,80 @@ class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin 
         ? y.clamp(0 - (computedHeight / 2) + screenHalfY, computedHeight / 2 - screenHalfY)
         : 0.0;
 
-    return new Offset(computedX, computedY);
+    return Offset(computedX, computedY);
   }
 
-  // ======== handle gesture
-
-  _handleDoubleTap() {
-    if (_scale > kMinScale) {
-      _resetAnimations();
-    } else {
-      _forwardAnimations();
-    }
-
-    _controller.reset();
-    _controller.forward();
+  double scaleStateAwareScale() {
+    return _scale;
   }
 
-  _handleScaleStart(ScaleStartDetails details) {
-    _downPoint = details.focalPoint;
-    _lastScaleValue = _scale;
-    _lastPosition = details.focalPoint - _position;
-    _downPosition = _position;
-    // 计算出当前图像的中心点距离屏幕中心点的距离
+  void animateScale(double from, double to) {
+    _scaleAnimation = Tween<double>(
+      begin: from,
+      end: to,
+    ).animate(_scaleAnimationController);
+    _scaleAnimationController
+      ..value = 0.0
+      ..fling(velocity: 0.4);
   }
 
-  _handleScaleUpdate(ScaleUpdateDetails details) {
-    double newScale = (_lastScaleValue * details.scale);
-
-    if (newScale < kMinScale) {
-      newScale = kMinScale;
-    } else if (newScale > kMaxScale) {
-      newScale = kMaxScale;
-    }
-
-    var deltaScale = _lastScaleValue - newScale;
-    var ratio = deltaScale / (kMaxScale - kMinScale);
-    var dx = _downPosition.dx - ratio * _downPosition.dx;
-    var dy = _downPosition.dy - ratio * _downPosition.dy;
-
-    final Offset positionDelta = (details.focalPoint - _lastPosition);
-
-    setState(() {
-      _scale = newScale;
-      _position = _clampPosition(Offset(dx, dy), _scale);
-
-      // 表示没有缩放操作才响应平移操作
-      if (_lastScaleValue == _scale) {
-        _position = _clampPosition(positionDelta, _scale);
-      }
-    });
+  void animatePosition(Offset from, Offset to) {
+    _positionAnimation = Tween<Offset>(begin: from, end: to).animate(_positionAnimationController);
+    _positionAnimationController
+      ..value = 0.0
+      ..fling(velocity: 0.4);
   }
 
-  _handleScaleEnd(ScaleEndDetails details) {}
+  @override
+  void initState() {
+    super.initState();
+    _position = Offset.zero;
+    _scale = 1.0;
+    _scaleAnimationController = AnimationController(vsync: this)..addListener(handleScaleAnimation);
+
+    _positionAnimationController = AnimationController(vsync: this)
+      ..addListener(handlePositionAnimate);
+  }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _positionAnimationController.dispose();
+    _scaleAnimationController.dispose();
     super.dispose();
   }
 
+  // ==== 辅助动画/手势的计算
+  int _lastTapTime = 0;
+
+  _handleDoubleTap() {
+    final double maxScale = 3.0;
+    final double minScale = 1.0;
+
+    //animate back to maxScale if gesture exceeded the maxScale specified
+    if (_scale > 1.0) {
+      animateScale(_scale, minScale);
+      animatePosition(_position, Offset.zero);
+    } else {
+      final double scaleComebackRatio = maxScale / _scale;
+      animateScale(_scale, maxScale);
+      animatePosition(_position, clampPosition(_downPoint * scaleComebackRatio, maxScale));
+    }
+  }
+
+  Offset _downPoint;
+
   @override
   Widget build(BuildContext context) {
-    final Matrix4 transform = new Matrix4.identity()
+    final transform = Matrix4.identity()
       ..translate(_position.dx, _position.dy)
-      ..scale(_scale, _scale, 1.0);
+      ..scale(scaleStateAwareScale());
 
     return new GestureDetector(
       onTapDown: (TapDownDetails details) {
-        _downPoint = details.globalPosition;
-        _controller.stop();
+        var half = context.size / 2.0;
+        _downPoint = Offset(half.width, half.height) - details.globalPosition;
+        _scaleAnimationController.stop();
+        _positionAnimationController.stop();
 
         // Handle the gesture as a Double tap if the time between the double tap was in 500ms
         var tapTime = DateTime.now().millisecondsSinceEpoch;
@@ -169,37 +186,43 @@ class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin 
           _lastTapTime = tapTime;
         }
       },
-      onTap: () {
-//          Navigator.of(context).pop();
-      },
-      onScaleStart: _handleScaleStart,
-      onScaleUpdate: _handleScaleUpdate,
-      onScaleEnd: _handleScaleEnd,
+//      onTap: () {
+////          Navigator.of(context).pop();
+//      },
+      onScaleStart: onScaleStart,
+      onScaleUpdate: onScaleUpdate,
+      onScaleEnd: onScaleEnd,
       child: new Container(
         width: double.infinity,
         height: double.infinity,
         color: Colors.black,
         alignment: Alignment.center,
-        child: new Wrap(
-          children: <Widget>[
-            new Transform(
-              transform: transform,
-              alignment: Alignment.center,
-              child: IgnorePointer(
-                ignoringSemantics: true,
-                child: new CachedNetworkImage(
-                  imageUrl: widget.imageUrl,
-                  key: _imageKey,
-                  placeholder: Center(
-                    child: CircularProgressIndicator(),
-                  ),
-                  errorWidget: Center(
-                    child: new Icon(Icons.image, size: 56.0),
-                  ),
-                ),
-              ),
-            ),
-          ],
+        child: new Center(
+          child: new Transform(
+            transform: transform,
+            alignment: Alignment.center,
+            child: _buildHero(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHero() {
+    return widget.heroTag != null ? Hero(tag: widget.heroTag, child: _buildImage()) : _buildImage();
+  }
+
+  Widget _buildImage() {
+    return IgnorePointer(
+      ignoringSemantics: true,
+      child: new CachedNetworkImage(
+        imageUrl: widget.imageUrl,
+        key: _imageKey,
+        placeholder: Center(
+          child: CircularProgressIndicator(),
+        ),
+        errorWidget: Center(
+          child: new Icon(Icons.image, size: 56.0),
         ),
       ),
     );
