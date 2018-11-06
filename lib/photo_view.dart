@@ -2,14 +2,14 @@ import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_photo_view/custom_gesture_detector.dart';
 
 class PhotoView extends StatefulWidget {
   final String imageUrl;
-  final AnimationController opacityController;
   final String heroTag;
+  final GestureTapCallback onTap;
 
-  PhotoView({Key key, @required this.imageUrl, @required this.opacityController, this.heroTag})
-      : super(key: key);
+  PhotoView({Key key, @required this.imageUrl, this.heroTag, this.onTap}) : super(key: key);
 
   @override
   State<StatefulWidget> createState() => new _LoadMoreViewState();
@@ -21,6 +21,7 @@ const double kMaxScale = 3.0;
 class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin {
   GlobalKey _imageKey = new GlobalKey();
 
+  Offset _downPosition;
   Offset _position;
   Offset _normalizedPosition;
   double _scale;
@@ -31,6 +32,34 @@ class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin 
 
   AnimationController _positionAnimationController;
   Animation<Offset> _positionAnimation;
+
+  ImagePositionDelegate _imagePositionDelegate;
+  BoxConstraints _childConstrains = BoxConstraints();
+
+  @override
+  void initState() {
+    super.initState();
+    _position = Offset.zero;
+    _scale = 1.0;
+    _scaleAnimationController = AnimationController(vsync: this)..addListener(handleScaleAnimation);
+
+    _positionAnimationController = AnimationController(vsync: this)
+      ..addListener(handlePositionAnimate);
+
+    _imagePositionDelegate = ImagePositionDelegate((constraint) {
+      Future.delayed(Duration(milliseconds: 100)).then((_) {
+        _childConstrains = constraint;
+        setState(() {});
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _positionAnimationController.dispose();
+    _scaleAnimationController.dispose();
+    super.dispose();
+  }
 
   void handleScaleAnimation() {
     setState(() {
@@ -126,27 +155,6 @@ class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin 
       ..fling(velocity: 0.4);
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _position = Offset.zero;
-    _scale = 1.0;
-    _scaleAnimationController = AnimationController(vsync: this)..addListener(handleScaleAnimation);
-
-    _positionAnimationController = AnimationController(vsync: this)
-      ..addListener(handlePositionAnimate);
-  }
-
-  @override
-  void dispose() {
-    _positionAnimationController.dispose();
-    _scaleAnimationController.dispose();
-    super.dispose();
-  }
-
-  // ==== 辅助动画/手势的计算
-  int _lastTapTime = 0;
-
   _handleDoubleTap() {
     final double maxScale = 3.0;
     final double minScale = 1.0;
@@ -158,50 +166,45 @@ class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin 
     } else {
       final double scaleComebackRatio = maxScale / _scale;
       animateScale(_scale, maxScale);
-      animatePosition(_position, clampPosition(_downPoint * scaleComebackRatio, maxScale));
+      animatePosition(_position, clampPosition(_downPosition * scaleComebackRatio, maxScale));
     }
   }
 
-  Offset _downPoint;
-
   @override
   Widget build(BuildContext context) {
-    final transform = Matrix4.identity()
+    final matrix = Matrix4.identity()
       ..translate(_position.dx, _position.dy)
       ..scale(scaleStateAwareScale());
 
-    return new GestureDetector(
-      onTapDown: (TapDownDetails details) {
-        var half = context.size / 2.0;
-        _downPoint = Offset(half.width, half.height) - details.globalPosition;
-        _scaleAnimationController.stop();
-        _positionAnimationController.stop();
-
-        // Handle the gesture as a Double tap if the time between the double tap was in 500ms
-        var tapTime = DateTime.now().millisecondsSinceEpoch;
-        if (tapTime - _lastTapTime < 500) {
-          _lastTapTime = 0;
-          _handleDoubleTap();
-        } else {
-          _lastTapTime = tapTime;
+    return new CustomGestureDetector(
+      onTap: () {
+        if (widget.onTap != null) {
+          widget.onTap();
         }
       },
-//      onTap: () {
-////          Navigator.of(context).pop();
-//      },
+      onDoubleTap: () {
+        _handleDoubleTap();
+      },
+      onTouchDown: (TapDownDetails details) {
+        var half = context.size / 2.0;
+        _downPosition = Offset(half.width, half.height) - details.globalPosition;
+
+        _scaleAnimationController.stop();
+        _positionAnimationController.stop();
+      },
       onScaleStart: onScaleStart,
       onScaleUpdate: onScaleUpdate,
       onScaleEnd: onScaleEnd,
-      child: new Container(
-        width: double.infinity,
-        height: double.infinity,
+      child: Container(
         color: Colors.black,
-        alignment: Alignment.center,
-        child: new Center(
-          child: new Transform(
-            transform: transform,
+        child: Center(
+          child: Transform(
+            transform: matrix,
             alignment: Alignment.center,
-            child: _buildHero(),
+            child: CustomSingleChildLayout(
+              delegate: _imagePositionDelegate,
+              child: _buildHero(),
+            ),
           ),
         ),
       ),
@@ -213,18 +216,61 @@ class _LoadMoreViewState extends State<PhotoView> with TickerProviderStateMixin 
   }
 
   Widget _buildImage() {
-    return IgnorePointer(
-      ignoringSemantics: true,
-      child: new CachedNetworkImage(
-        imageUrl: widget.imageUrl,
-        key: _imageKey,
-        placeholder: Center(
-          child: CircularProgressIndicator(),
-        ),
-        errorWidget: Center(
-          child: new Icon(Icons.image, size: 56.0),
+    return Container(
+      constraints: _childConstrains,
+      child: IgnorePointer(
+        ignoringSemantics: true,
+        child: new CachedNetworkImage(
+          imageUrl: widget.imageUrl,
+          key: _imageKey,
+          fit: BoxFit.contain,
+          placeholder: Center(
+            child: CircularProgressIndicator(),
+          ),
+          errorWidget: Center(
+            child: new Icon(Icons.image, size: 56.0),
+          ),
         ),
       ),
     );
+  }
+}
+
+class ImagePositionDelegate extends SingleChildLayoutDelegate {
+  Function onChildSizeChanged = (BoxConstraints childConstrains) {};
+
+  ImagePositionDelegate(this.onChildSizeChanged);
+
+  BoxConstraints _childConstrains;
+
+  @override
+  bool shouldRelayout(SingleChildLayoutDelegate oldDelegate) {
+    return true;
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    if (size != childSize) {
+      var ratioW = size.width / childSize.width;
+      var ratioH = size.height / childSize.height;
+      var ratio = 1.0;
+      if (ratioW > ratioH) {
+        ratio = ratioH;
+      } else {
+        ratio = ratioW;
+      }
+
+      var constraint = BoxConstraints.expand(
+        width: childSize.width * ratio,
+        height: childSize.height * ratio,
+      );
+
+      if (constraint != _childConstrains) {
+        _childConstrains = constraint;
+        onChildSizeChanged(constraint);
+      }
+    }
+
+    return ((size - childSize) as Offset) / 2.0;
   }
 }

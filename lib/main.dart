@@ -17,27 +17,12 @@ class TestPhotoView extends StatefulWidget {
 }
 
 class _TestPhotoViewState extends State<TestPhotoView> with SingleTickerProviderStateMixin {
-  AnimationController controller;
-
-  @override
-  void initState() {
-    super.initState();
-    controller = new AnimationController(vsync: this);
-  }
-
-  @override
-  void dispose() {
-    controller.dispose();
-
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     return new PhotoView(
-      imageUrl: 'http://ww2.sinaimg.cn/large/610dc034jw1f3rbikc83dj20dw0kuadt.jpg',
+//      imageUrl: 'http://ww2.sinaimg.cn/large/610dc034jw1f3rbikc83dj20dw0kuadt.jpg',
 //      imageUrl: 'http://img.soogif.com/YpEcZKVZvshJEC2dSrWAXQkhFDjBSyqR.gif',
-      opacityController: controller,
+      imageUrl: 'http://upload.huwaitanzi.com/team-一粒尘埃的吻-0588eb54-02b5-4a8e-9af4-4148f0078726.jpg',
     );
   }
 }
